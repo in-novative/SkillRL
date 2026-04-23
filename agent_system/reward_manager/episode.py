@@ -76,7 +76,11 @@ class EpisodeRewardManager:
                 score = episode_rewards / episode_lengths
             else:
                 score = episode_rewards
-            reward_tensor[i, valid_response_length - 1] = torch.tensor(score, dtype=torch.float32, device=prompt_ids.device)
+
+            subgoal_reward = data_item.non_tensor_batch.get('subgoal_reward', None)
+            step_score = score + float(subgoal_reward) if subgoal_reward is not None else score
+
+            reward_tensor[i, valid_response_length - 1] = torch.tensor(step_score, dtype=torch.float32, device=prompt_ids.device)
 
             if data_source not in already_print_data_sources:
                 already_print_data_sources[data_source] = 0
@@ -85,7 +89,7 @@ class EpisodeRewardManager:
                 already_print_data_sources[data_source] += 1
                 print(f"[{data_source}][prompt]", prompt_str)
                 print(f"[{data_source}][response]", response_str)
-                print(f"[{data_source}][score]", score)
+                print(f"[{data_source}][score]", step_score)
 
         if return_dict:
             return {

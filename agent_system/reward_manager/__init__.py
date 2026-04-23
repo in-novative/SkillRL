@@ -14,3 +14,4 @@
 # limitations under the License.
 
 from .episode import EpisodeRewardManager
+from .subgoal_tracker import SubgoalTracker, SubgoalExtractor, build_subgoal_tracker

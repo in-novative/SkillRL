@@ -308,6 +308,12 @@ class TrajectoryCollector:
         # Initial observations from the environment
         obs, infos = envs.reset(kwargs=gen_batch.non_tensor_batch.pop('env_kwargs', None))
 
+        # Build subgoal tracker if enabled
+        subgoal_tracker = None
+        if self.config.env.get('subgoal_reward', {}).get('enable', False):
+            from agent_system.reward_manager.subgoal_tracker import build_subgoal_tracker
+            subgoal_tracker = build_subgoal_tracker(envs, self.config)
+
         lenght_obs = len(obs['text']) if obs['text'] is not None else len(obs['image'])
         assert len(gen_batch.batch) == lenght_obs, f"gen_batch size {len(gen_batch.batch)} does not match obs size {lenght_obs}"
         
@@ -364,7 +370,18 @@ class TrajectoryCollector:
             
             next_obs, rewards, dones, infos = envs.step(text_actions)
 
-            
+            # Subgoal process reward injection
+            subgoal_rewards_np = np.zeros(batch_size, dtype=np.float32)
+            if subgoal_tracker is not None:
+                subgoal_rewards_np = subgoal_tracker.check(
+                    obs_texts=next_obs.get('text') or [''] * batch_size,
+                    action_texts=text_actions,
+                    active_masks=active_masks,
+                )
+                rewards_np = torch_to_numpy(rewards)
+                rewards_np = rewards_np + subgoal_rewards_np
+                rewards = torch.tensor(rewards_np, dtype=rewards.dtype if isinstance(rewards, torch.Tensor) else torch.float32)
+
             if len(rewards.shape) == 2:
                 rewards = rewards.squeeze(1)
             if len(dones.shape) == 2:
@@ -386,6 +403,7 @@ class TrajectoryCollector:
             assert len(rewards) == batch_size, f"env should return rewards for all environments, got {len(rewards)} rewards for {batch_size} environments"
             batch.non_tensor_batch['rewards'] = torch_to_numpy(rewards, is_object=True)
             batch.non_tensor_batch['active_masks'] = torch_to_numpy(active_masks, is_object=True)
+            batch.non_tensor_batch['subgoal_reward'] = subgoal_rewards_np
             
             # Update episode lengths for active environments
             batch_list: list[dict] = to_list_of_dict(batch)

@@ -314,3 +314,6 @@ env:
   webshop:
     use_small: True
     human_goals: False
+  subgoal_reward:
+    enable: False           # set True to enable subgoal process rewards
+    reward_per_subgoal: 0.1 # reward added per completed subgoal (ALFWorld: ~4-6 subgoals; WebShop: 4 stages)
