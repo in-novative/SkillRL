@@ -317,3 +317,7 @@ env:
   subgoal_reward:
     enable: False           # set True to enable subgoal process rewards
     reward_per_subgoal: 0.1 # reward added per completed subgoal (ALFWorld: ~4-6 subgoals; WebShop: 4 stages)
+  graph_skill_reward:
+    enable: False                # set True to enable graph transition rewards
+    reward_per_transition: 0.15  # base reward per valid skill-graph edge traversal
+                                 # actual reward = reward_per_transition * edge_weight

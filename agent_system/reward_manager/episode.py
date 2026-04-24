@@ -78,7 +78,13 @@ class EpisodeRewardManager:
                 score = episode_rewards
 
             subgoal_reward = data_item.non_tensor_batch.get('subgoal_reward', None)
-            step_score = score + float(subgoal_reward) if subgoal_reward is not None else score
+            graph_reward = data_item.non_tensor_batch.get('graph_transition_reward', None)
+
+            step_score = score
+            if subgoal_reward is not None:
+                step_score += float(subgoal_reward)
+            if graph_reward is not None:
+                step_score += float(graph_reward)
 
             reward_tensor[i, valid_response_length - 1] = torch.tensor(step_score, dtype=torch.float32, device=prompt_ids.device)
 

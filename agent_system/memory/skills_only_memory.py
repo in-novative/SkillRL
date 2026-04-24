@@ -31,6 +31,7 @@ import json
 import os
 from typing import Dict, Any, List, Optional
 from .base import BaseMemory
+from .skill_graph import SkillGraph
 
 
 class SkillsOnlyMemory(BaseMemory):
@@ -61,6 +62,7 @@ class SkillsOnlyMemory(BaseMemory):
         retrieval_mode: str = "template",
         embedding_model_path: Optional[str] = None,
         task_specific_top_k: Optional[int] = None,
+        use_skill_graph: bool = False,
     ):
         """
         Args:
@@ -74,6 +76,10 @@ class SkillsOnlyMemory(BaseMemory):
                                   return.  ``None`` means *return all* in
                                   template mode and use ``top_k`` (general
                                   skills count) in embedding mode.
+            use_skill_graph:      If True, build a SkillGraph from the loaded
+                                  skills JSON and expose it as ``self.skill_graph``.
+                                  Also enables next-skill recommendations in
+                                  retrieve() and format_for_prompt().
         """
         if retrieval_mode not in ("template", "embedding"):
             raise ValueError(
@@ -89,6 +95,11 @@ class SkillsOnlyMemory(BaseMemory):
         self.retrieval_mode = retrieval_mode
         self.embedding_model_path = embedding_model_path or "Qwen/Qwen3-Embedding-0.6B"
         self.task_specific_top_k = task_specific_top_k
+
+        # Optional skill graph
+        self.skill_graph: Optional[SkillGraph] = (
+            SkillGraph.from_skills_json(self.skills) if use_skill_graph else None
+        )
 
         # Lazy-initialised embedding state (only used in embedding mode)
         self._embedding_model = None
@@ -320,12 +331,14 @@ class SkillsOnlyMemory(BaseMemory):
 
         Returns:
             Dictionary with keys:
-              - ``general_skills``       – list of skill dicts
-              - ``task_specific_skills`` – list of skill dicts
-              - ``mistakes_to_avoid``    – list of common-mistake dicts
-              - ``task_type``            – detected task type string
-              - ``task_specific_examples`` – always ``[]`` (reserved)
-              - ``retrieval_mode``       – which mode was used
+              - ``general_skills``          – list of skill dicts
+              - ``task_specific_skills``    – list of skill dicts
+              - ``mistakes_to_avoid``       – list of common-mistake dicts
+              - ``task_type``               – detected task type string
+              - ``task_specific_examples``  – always ``[]`` (reserved)
+              - ``retrieval_mode``          – which mode was used
+              - ``active_skill_ids``        – skill_ids of top retrieved skills (graph mode)
+              - ``next_recommended_skills`` – neighbor skill dicts from the graph
         """
         common_mistakes = self.skills.get('common_mistakes', [])[:5]
 
@@ -341,6 +354,7 @@ class SkillsOnlyMemory(BaseMemory):
             )
             # Still detect task type for bookkeeping / formatting labels
             task_type = self._detect_task_type(task_description)
+            active_ids = [s['skill_id'] for s in task_skills[:3] if 'skill_id' in s]
             return {
                 'general_skills': general_skills,
                 'task_specific_skills': task_skills,
@@ -348,6 +362,8 @@ class SkillsOnlyMemory(BaseMemory):
                 'task_type': task_type,
                 'task_specific_examples': [],
                 'retrieval_mode': 'embedding',
+                'active_skill_ids': active_ids,
+                'next_recommended_skills': self._get_next_skills(task_skills, active_ids),
             }
 
         # ----------------------------------------------------------------
@@ -372,6 +388,7 @@ class SkillsOnlyMemory(BaseMemory):
         else:
             task_skills = all_task_skills  # original behaviour: return all
 
+        active_ids = [s['skill_id'] for s in task_skills[:3] if 'skill_id' in s]
         return {
             'general_skills': general_skills,
             'task_specific_skills': task_skills,
@@ -379,7 +396,24 @@ class SkillsOnlyMemory(BaseMemory):
             'task_type': task_type,
             'task_specific_examples': [],
             'retrieval_mode': 'template',
+            'active_skill_ids': active_ids,
+            'next_recommended_skills': self._get_next_skills(task_skills, active_ids),
         }
+
+    def _get_next_skills(self, task_skills: List[dict], active_ids: List[str]) -> List[dict]:
+        """Return neighbor skill dicts for the top active skill nodes (graph mode only)."""
+        if self.skill_graph is None:
+            return []
+        seen_ids = {s.get('skill_id') for s in task_skills}
+        result = []
+        for sid in active_ids[:2]:
+            for neighbor in self.skill_graph.get_neighbor_skill_dicts(sid):
+                nid = neighbor.get('skill_id')
+                if nid and nid not in seen_ids and nid not in {r.get('skill_id') for r in result}:
+                    result.append(neighbor)
+                    if len(result) >= 3:
+                        return result
+        return result
 
     def format_for_prompt(self, retrieved_memories: Dict[str, Any]) -> str:
         """
@@ -434,6 +468,16 @@ class SkillsOnlyMemory(BaseMemory):
                     lines.append(f"- **Don't**: {desc}")
                     if fix:
                         lines.append(f"  **Instead**: {fix}")
+            sections.append("\n".join(lines))
+
+        # Next recommended skills from skill graph
+        next_skills = retrieved_memories.get('next_recommended_skills', [])
+        if next_skills and self.skill_graph is not None:
+            lines = ["### Next Recommended Skills"]
+            for skill in next_skills:
+                title = skill.get('title', '')
+                principle = skill.get('principle', '')
+                lines.append(f"- **{title}**: {principle}")
             sections.append("\n".join(lines))
 
         return "\n\n".join(sections) if sections else "No relevant skills found for this task."

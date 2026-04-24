@@ -314,6 +314,14 @@ class TrajectoryCollector:
             from agent_system.reward_manager.subgoal_tracker import build_subgoal_tracker
             subgoal_tracker = build_subgoal_tracker(envs, self.config)
 
+        # Build graph skill tracker if enabled
+        graph_skill_tracker = None
+        if self.config.env.get('graph_skill_reward', {}).get('enable', False):
+            from agent_system.reward_manager.graph_skill_tracker import build_graph_skill_tracker
+            skill_graph = getattr(getattr(envs, 'retrieval_memory', None), 'skill_graph', None)
+            if skill_graph is not None:
+                graph_skill_tracker = build_graph_skill_tracker(envs, self.config, skill_graph)
+
         lenght_obs = len(obs['text']) if obs['text'] is not None else len(obs['image'])
         assert len(gen_batch.batch) == lenght_obs, f"gen_batch size {len(gen_batch.batch)} does not match obs size {lenght_obs}"
         
@@ -382,6 +390,18 @@ class TrajectoryCollector:
                 rewards_np = rewards_np + subgoal_rewards_np
                 rewards = torch.tensor(rewards_np, dtype=rewards.dtype if isinstance(rewards, torch.Tensor) else torch.float32)
 
+            # Graph skill transition reward injection
+            graph_rewards_np = np.zeros(batch_size, dtype=np.float32)
+            if graph_skill_tracker is not None:
+                graph_rewards_np = graph_skill_tracker.check(
+                    obs_texts=next_obs.get('text') or [''] * batch_size,
+                    action_texts=text_actions,
+                    active_masks=active_masks,
+                )
+                rewards_np = torch_to_numpy(rewards)
+                rewards_np = rewards_np + graph_rewards_np
+                rewards = torch.tensor(rewards_np, dtype=rewards.dtype if isinstance(rewards, torch.Tensor) else torch.float32)
+
             if len(rewards.shape) == 2:
                 rewards = rewards.squeeze(1)
             if len(dones.shape) == 2:
@@ -404,6 +424,7 @@ class TrajectoryCollector:
             batch.non_tensor_batch['rewards'] = torch_to_numpy(rewards, is_object=True)
             batch.non_tensor_batch['active_masks'] = torch_to_numpy(active_masks, is_object=True)
             batch.non_tensor_batch['subgoal_reward'] = subgoal_rewards_np
+            batch.non_tensor_batch['graph_transition_reward'] = graph_rewards_np
             
             # Update episode lengths for active environments
             batch_list: list[dict] = to_list_of_dict(batch)
